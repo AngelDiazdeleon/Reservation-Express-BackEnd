@@ -5,8 +5,8 @@ import morgan from 'morgan';
 import cors from 'cors';
 
 // Importar Rutas
-import taskRoutes from './routes/task.routes.js';
-import authRoutes from './routes/auth.routes.js';
+// import taskRoutes from './routes/task.routes.js';
+// import authRoutes from './routes/auth.routes.js';
 import e from 'cors';
 
 
@@ -17,8 +17,8 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 app.get('/', (req, res) => res.json({ok: true, name: 'todo-pwa-api'}));
-app.use('/api/tasks', taskRoutes);
-app.use('/api/auth', authRoutes);
+// app.use('/api/tasks', taskRoutes);
+//app.use('/api/auth', authRoutes);
 
 const{ PORT = 4000, MONGO_URI } = process.env;
 
