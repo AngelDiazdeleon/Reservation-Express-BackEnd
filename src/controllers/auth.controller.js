@@ -1,3 +1,4 @@
+// auth.controller.js
 import User from "../models/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -43,7 +44,8 @@ export async function register(req, res) {
       },
     });
   } catch (e) {
-    res.status(500).json({ message: "Error del servidor" });
+  console.error("Error en registro:", e); // 👈 imprime el error real
+  res.status(500).json({ message: "Error del servidor" });
   }
 }
 
