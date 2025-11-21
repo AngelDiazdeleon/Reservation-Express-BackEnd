@@ -11,7 +11,7 @@ const authRoutes = require('./routes/auth.routes');
 const publicationRequestRoutes = require('./routes/publicationRequest.routes');
 const adminRoutes = require('./routes/admin.routes');
 const reservationRoutes = require('./routes/reservation.routes');
-
+const userRoutes = require('./routes/user.routes');
 const app = express();
 
 app.use(cors());
@@ -39,4 +39,6 @@ app.use('/api/publication-requests', publicationRequestRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/reservations', reservationRoutes);
 
+
+app.use('/api/user', userRoutes); // ← Esto debe estar
 module.exports = app;
