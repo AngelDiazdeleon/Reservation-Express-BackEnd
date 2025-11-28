@@ -1,163 +1,321 @@
-import { Request, Response } from 'express';
+const DocumentVerification = require('../models/documentVerification');
+const localFileService = require('../services/localFile.service');
+const fs = require('fs');
+const path = require('path');
 
-// Interfaces
-interface Document {
-  filename: string;
-  originalname: string;
-  path: string;
-  size: number;
-  mimetype: string;
-}
-
-interface VerificationRequest {
-  id: string;
-  documents: Document[];
-  additionalNotes: string;
-  status: 'pending' | 'approved' | 'rejected';
-  submittedAt: Date;
-  reviewedAt: Date | null;
-  reviewer: string | null;
-  reviewNotes: string | null;
-}
-
-// Simulación de base de datos (en producción usarías una base de datos real)
-let verificationRequests: VerificationRequest[] = [];
-
-export const uploadDocuments = async (req: Request, res: Response) => {
+exports.uploadDocuments = async (req, res) => {
   try {
-    const { documents, additionalNotes } = req.body;
+    console.log('🖼️ Iniciando upload de imágenes...');
+    console.log('📋 Imágenes recibidas:', req.files ? req.files.length : 0);
+    console.log('🏷️ Categorías:', req.body.categories);
+    console.log('👤 Usuario autenticado:', req.user); // ✅ VERIFICAR USUARIO
 
-    if (!documents || documents.length === 0) {
-      return res.status(400).json({ 
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
         success: false,
-        error: 'No se han subido archivos' 
+        message: 'No se han subido imágenes'
       });
     }
 
-    // Crear registro de verificación
-    const verificationRequest: VerificationRequest = {
-      id: 'ES-' + Date.now(),
-      documents: documents.map((doc: any) => ({
-        filename: doc.name,
-        originalname: doc.name,
-        path: `/uploads/${doc.name}`,
-        size: doc.size,
-        mimetype: doc.type
-      })),
-      additionalNotes: additionalNotes || '',
-      status: 'pending',
-      submittedAt: new Date(),
-      reviewedAt: null,
-      reviewer: null,
-      reviewNotes: null
-    };
+    // ✅ OBTENER USER ID DEL MIDDLEWARE DE AUTENTICACIÓN
+    const userId = req.user.id;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Usuario no autenticado'
+      });
+    }
 
-    verificationRequests.push(verificationRequest);
+    const categories = Array.isArray(req.body.categories) ? req.body.categories : [req.body.categories];
 
-    // Simular procesamiento asíncrono
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    console.log('💾 Guardando imágenes para usuario:', userId);
+
+    const documentPromises = req.files.map(async (file, index) => {
+      const category = categories && categories[index] ? categories[index] : 'general';
+      
+      console.log(`🖼️ Procesando imagen ${index + 1}:`, {
+        nombre: file.originalname,
+        tipo: file.mimetype,
+        tamaño: file.size,
+        categoría: category,
+        usuario: userId // ✅ AGREGAR USUARIO AL LOG
+      });
+
+      try {
+        // Guardar archivo localmente
+        const saveResult = await localFileService.saveFile(
+          file.buffer,
+          file.originalname
+        );
+
+        console.log('✅ Imagen guardada localmente:', saveResult.fileName);
+
+        // Crear documento en la base de datos
+        const document = new DocumentVerification({
+          userId: userId, // ✅ USAR EL ID DEL USUARIO AUTENTICADO
+          fileName: saveResult.originalName,
+          filePath: saveResult.fileName,
+          fileSize: file.size,
+          fileType: path.extname(file.originalname),
+          category: category,
+          description: `Imagen de verificación - ${category}`,
+          uploadDate: new Date(),
+          status: 'pending',
+          mimeType: file.mimetype
+        });
+
+        const savedDoc = await document.save();
+        console.log('✅ Documento guardado en MongoDB para usuario:', userId);
+        
+        return savedDoc;
+        
+      } catch (uploadError) {
+        console.error('❌ Error al guardar imagen:', uploadError.message);
+        throw new Error(`Error al procesar imagen ${file.originalname}: ${uploadError.message}`);
+      }
+    });
+
+    const savedDocuments = await Promise.all(documentPromises);
+
+    console.log('🎉 Upload completado. Imágenes guardadas para usuario:', userId);
 
     res.status(200).json({
       success: true,
-      message: 'Documentos subidos exitosamente',
-      requestId: verificationRequest.id,
-      filesCount: documents.length
+      message: `✅ ${savedDocuments.length} imágenes guardadas exitosamente`,
+      documents: savedDocuments,
+      requestId: `req_${Date.now()}_${userId}`,
+      totalDocuments: savedDocuments.length
     });
 
   } catch (error) {
-    console.error('Error al subir documentos:', error);
-    res.status(500).json({ 
+    console.error('❌ Error en uploadDocuments:', error.message);
+
+    res.status(500).json({
       success: false,
-      error: 'Error interno del servidor' 
+      message: error.message || 'Error al procesar las imágenes'
     });
   }
 };
 
-export const getVerificationStatus = async (req: Request, res: Response) => {
+// ✅ CORREGIR: Obtener documentos del usuario autenticado
+exports.getUserDocuments = async (req, res) => {
   try {
-    const { requestId } = req.params;
-    const request = verificationRequests.find(req => req.id === requestId);
-
-    if (!request) {
-      return res.status(404).json({ 
+    // ✅ OBTENER USER ID DEL MIDDLEWARE DE AUTENTICACIÓN
+    const userId = req.user.id;
+    if (!userId) {
+      return res.status(401).json({
         success: false,
-        error: 'Solicitud no encontrada' 
+        message: 'Usuario no autenticado'
       });
     }
 
-    res.json({
+    console.log('📋 Obteniendo imágenes del usuario autenticado:', userId);
+
+    // ✅ FILTRAR SOLO POR EL USUARIO AUTENTICADO
+    const documents = await DocumentVerification.find({ userId: userId })
+      .sort({ uploadDate: -1 });
+
+    console.log(`✅ Encontrados ${documents.length} documentos para usuario ${userId}`);
+
+    res.status(200).json({
       success: true,
-      request
+      documents: documents,
+      total: documents.length
     });
 
   } catch (error) {
-    console.error('Error al obtener estado:', error);
-    res.status(500).json({ 
+    console.error('❌ Error en getUserDocuments:', error);
+    res.status(500).json({
       success: false,
-      error: 'Error interno del servidor' 
+      message: 'Error al obtener imágenes'
     });
   }
 };
 
-export const getPendingRequests = async (req: Request, res: Response) => {
+// Los demás métodos permanecen igual pero agregar verificación de propiedad
+exports.downloadDocument = async (req, res) => {
   try {
-    const pendingRequests = verificationRequests.filter(req => req.status === 'pending');
+    const documentId = req.params.id;
+    const userId = req.user.id; // ✅ OBTENER USUARIO AUTENTICADO
+
+    console.log('📥 Solicitando imagen:', documentId, 'para usuario:', userId);
+
+    const document = await DocumentVerification.findById(documentId);
     
-    res.json({
-      success: true,
-      requests: pendingRequests,
-      count: pendingRequests.length
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Imagen no encontrada'
+      });
+    }
+
+    // ✅ VERIFICAR QUE EL DOCUMENTO PERTENEZCA AL USUARIO
+    if (document.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para acceder a este documento'
+      });
+    }
+
+    console.log('🖼️ Sirviendo imagen:', document.fileName);
+
+    const fileStream = localFileService.getFile(document.filePath);
+    
+    if (!fileStream) {
+      return res.status(404).json({
+        success: false,
+        message: 'Archivo de imagen no encontrado'
+      });
+    }
+
+    res.set({
+      'Content-Type': document.mimeType,
+      'Content-Disposition': `inline; filename="${document.fileName}"`,
+      'Content-Length': document.fileSize
     });
 
+    fileStream.pipe(res);
+
   } catch (error) {
-    console.error('Error al obtener solicitudes pendientes:', error);
-    res.status(500).json({ 
+    console.error('❌ Error en downloadDocument:', error);
+    res.status(500).json({
       success: false,
-      error: 'Error interno del servidor' 
+      message: 'Error al descargar la imagen'
     });
   }
 };
 
-export const reviewRequest = async (req: Request, res: Response) => {
+exports.deleteDocument = async (req, res) => {
   try {
-    const { requestId } = req.params;
-    const { status, reviewNotes, reviewer } = req.body;
+    const documentId = req.params.id;
+    const userId = req.user.id; // ✅ OBTENER USUARIO AUTENTICADO
 
-    if (!['approved', 'rejected'].includes(status)) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Estado no válido' 
-      });
-    }
+    console.log('🗑️ Eliminando imagen:', documentId, 'para usuario:', userId);
 
-    const requestIndex = verificationRequests.findIndex(req => req.id === requestId);
+    const document = await DocumentVerification.findById(documentId);
     
-    if (requestIndex === -1) {
-      return res.status(404).json({ 
+    if (!document) {
+      return res.status(404).json({
         success: false,
-        error: 'Solicitud no encontrada' 
+        message: 'Imagen no encontrada'
       });
     }
 
-    verificationRequests[requestIndex] = {
-      ...verificationRequests[requestIndex],
-      status,
-      reviewNotes,
-      reviewer: reviewer || 'admin',
-      reviewedAt: new Date()
-    };
+    // ✅ VERIFICAR QUE EL DOCUMENTO PERTENEZCA AL USUARIO
+    if (document.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para eliminar este documento'
+      });
+    }
 
-    res.json({
+    // Eliminar archivo local
+    await localFileService.deleteFile(document.filePath);
+
+    // Eliminar de la base de datos
+    await DocumentVerification.findByIdAndDelete(documentId);
+
+    console.log('✅ Imagen eliminada:', documentId);
+
+    res.status(200).json({
       success: true,
-      message: `Solicitud ${status === 'approved' ? 'aprobada' : 'rechazada'} exitosamente`,
-      request: verificationRequests[requestIndex]
+      message: 'Imagen eliminada exitosamente'
     });
 
   } catch (error) {
-    console.error('Error al verificar solicitud:', error);
-    res.status(500).json({ 
+    console.error('❌ Error en deleteDocument:', error);
+    res.status(500).json({
       success: false,
-      error: 'Error interno del servidor' 
+      message: 'Error al eliminar la imagen'
+    });
+  }
+};
+
+exports.getDocumentById = async (req, res) => {
+  try {
+    const documentId = req.params.id;
+    const userId = req.user.id; // ✅ OBTENER USUARIO AUTENTICADO
+
+    console.log('🔍 Buscando imagen:', documentId, 'para usuario:', userId);
+
+    const document = await DocumentVerification.findById(documentId);
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Imagen no encontrada'
+      });
+    }
+
+    // ✅ VERIFICAR QUE EL DOCUMENTO PERTENEZCA AL USUARIO
+    if (document.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para ver este documento'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      document: document
+    });
+
+  } catch (error) {
+    console.error('❌ Error en getDocumentById:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener la imagen'
+    });
+  }
+};
+
+exports.updateDocumentStatus = async (req, res) => {
+  try {
+    const documentId = req.params.id;
+    const { status, adminNotes } = req.body;
+    const userId = req.user.id; // ✅ OBTENER USUARIO AUTENTICADO
+
+    console.log('🔄 Actualizando estado del documento:', documentId, 'por usuario:', userId);
+
+    const document = await DocumentVerification.findById(documentId);
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Documento no encontrado'
+      });
+    }
+
+    // ✅ VERIFICAR QUE EL DOCUMENTO PERTENEZCA AL USUARIO (o permitir a admin)
+    if (document.userId !== userId && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para actualizar este documento'
+      });
+    }
+
+    const updatedDocument = await DocumentVerification.findByIdAndUpdate(
+      documentId,
+      { 
+        status: status,
+        reviewDate: new Date(),
+        reviewedBy: userId,
+        adminNotes: adminNotes
+      },
+      { new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Estado actualizado correctamente',
+      document: updatedDocument
+    });
+
+  } catch (error) {
+    console.error('❌ Error en updateDocumentStatus:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar el estado del documento'
     });
   }
 };
