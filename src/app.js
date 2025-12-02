@@ -1,3 +1,4 @@
+// app.js
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
@@ -5,16 +6,16 @@ const mongoose = require('mongoose');
 const imageService = require('./services/image.service');
 
 // Importar rutas
-const terraceRoutes = require('./routes/terrace.routes');
-const imageRoutes = require('./routes/image.routes');
-const permissionRoutes = require('./routes/permission.routes');
+
+;
+
 const authRoutes = require('./routes/auth.routes');
 const publicationRequestRoutes = require('./routes/publicationRequest.routes');
-const adminRoutes = require('./routes/admin.routes');
 const reservationRoutes = require('./routes/reservation.routes');
 const userRoutes = require('./routes/user.routes');
 const documentVerificationRoutes = require('./routes/documentVerification.routes');
-
+// En app.js - AGREGAR ESTA LÍNEA
+const terraceImagesRoutes = require('./routes/terraceImages.routes');
 const app = express();
 
 // Middlewares
@@ -29,8 +30,7 @@ mongoose.connection.once('open', () => {
   console.log('✅ GridFS inicializado para almacenar archivos');
 });
 
-// Servir archivos estáticos
-app.use('/uploads', express.static('uploads'));
+
 
 // Ruta de salud
 app.get('/', (req, res) => res.json({ 
@@ -42,16 +42,11 @@ app.get('/', (req, res) => res.json({
 
 // Registrar rutas
 app.use('/api/auth', authRoutes);
-app.use('/api/terraces', terraceRoutes);
-app.use('/api/images', imageRoutes);
-app.use('/api/permissions', permissionRoutes);
 app.use('/api/publication-requests', publicationRequestRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/reservations', reservationRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/document-verification', documentVerificationRoutes);
-app.use('/uploads', express.static('uploads'));
-app.use('/api/images', express.static('uploads/images'));
+
+
 
 // CORREGIDO: Manejo de rutas no encontradas
 app.use((req, res) => {
@@ -72,5 +67,16 @@ app.use((error, req, res, next) => {
     error: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
 });
+
+// En app.js, después de las otras rutas
+app.use('/api/terrace-images', require('./routes/terraceImages.routes'));
+app.use('/api/debug', require('./routes/imageDebug.routes'));
+// Servir la carpeta uploads completa
+app.use('/uploads', express.static('uploads'));
+
+// ... después de otras rutas
+app.use('/api/terrace-images', terraceImagesRoutes);
+
+
 
 module.exports = app;

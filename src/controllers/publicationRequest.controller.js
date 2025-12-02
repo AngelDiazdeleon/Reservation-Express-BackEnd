@@ -1,228 +1,331 @@
+// controllers/publicationRequest.controller.js
 const mongoose = require('mongoose');
 const PublicationRequest = require('../models/PublicationRequest');
-const Terrace = require('../models/Terrace');
+const localFileService = require('../services/localFile.service');
+const fs = require('fs');
 
 class PublicationRequestController {
-  constructor(imageService) {
-    this.imageService = imageService;
+  constructor() {
     this.create = this.create.bind(this);
     this.list = this.list.bind(this);
     this.getById = this.getById.bind(this);
     this.approve = this.approve.bind(this);
     this.reject = this.reject.bind(this);
-    this.getMyRequests = this.getMyRequests.bind(this); // ✅ NUEVO
+    this.getMyRequests = this.getMyRequests.bind(this);
+    this.getApprovedTerrazas = this.getApprovedTerrazas.bind(this);
+    this.getTerrazaById = this.getTerrazaById.bind(this);
   }
 
-  // owner submits request; req.user must exist (requireAuth) and be host (requireRole)
   async create(req, res) {
+    console.log('🚀 CREANDO PUBLICACIÓN CON LOCALFILESERVICE...');
+    
     try {
-      const ownerId = req.user.id; // ✅ MEJORADO - Siempre del usuario autenticado
+      // Verificar autenticación
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({
+          success: false,
+          message: 'Usuario no autenticado'
+        });
+      }
+
+      const ownerId = req.user.id;
       
-      // multer fields: photos[] and documents[]
+      console.log('👤 Usuario:', ownerId);
+      console.log('📦 Campos recibidos:', Object.keys(req.body));
+
+      // Validar campos requeridos
+      const requiredFields = ['name', 'description', 'capacity', 'location', 'price', 'contactPhone', 'contactEmail'];
+      const missingFields = requiredFields.filter(field => !req.body[field]);
+      
+      if (missingFields.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Faltan campos requeridos: ${missingFields.join(', ')}`
+        });
+      }
+
+      // Procesar fotos con tu LocalFileService existente
       const files = req.files || {};
       const photosFiles = files.photos || [];
-      const docsFiles = files.documents || [];
+      let uploadedPhotos = [];
 
-      const uploadedPhotos = await Promise.all(photosFiles.map(f => this.imageService.uploadImage(f)));
-      const uploadedDocs = await Promise.all(docsFiles.map(f => this.imageService.uploadImage(f)));
+      console.log(`🖼️ Procesando ${photosFiles.length} fotos con LocalFileService...`);
 
-      // ✅ ACTUALIZADO con documentType
-      const photos = uploadedPhotos.map(u => ({ 
-        fileId: u.fileId, 
-        filename: u.filename, 
-        mimetype: u.mimetype || '',
-        fileType: 'image'
-      }));
+      if (photosFiles.length > 0) {
+        for (let i = 0; i < photosFiles.length; i++) {
+          const file = photosFiles[i];
+          console.log(`📸 Subiendo foto ${i + 1}: ${file.originalname}`);
+          
+          try {
+            // Leer el archivo temporal como buffer
+            const fileBuffer = fs.readFileSync(file.path);
+            
+            // Usar tu LocalFileService existente (igual que para permisos)
+            const savedFile = await localFileService.saveFile(fileBuffer, file.originalname);
+            
+            uploadedPhotos.push({
+              fileId: new mongoose.Types.ObjectId(), // ID único para referencia
+              filename: savedFile.fileName,
+              filePath: savedFile.filePath, // Ruta donde se guardó el archivo
+              originalName: savedFile.originalName,
+              mimetype: file.mimetype,
+              fileType: 'image',
+              size: file.size
+            });
+            
+            console.log(`✅ Foto ${i + 1} guardada:`, savedFile.fileName);
+            
+            // Limpiar archivo temporal de multer
+            fs.unlinkSync(file.path);
+            
+          } catch (fileError) {
+            console.error(`❌ Error subiendo foto ${i + 1}:`, fileError.message);
+            // Continuar con las demás fotos
+          }
+        }
+      }
 
-      const documents = uploadedDocs.map((u, index) => ({ 
-        fileId: u.fileId, 
-        filename: u.filename, 
-        mimetype: u.mimetype || '',
-        fileType: 'document',
-        documentType: req.body.documentTypes ? req.body.documentTypes[index] : 'other' // ✅ NUEVO
-      }));
+      // Procesar amenities
+      let amenities = [];
+      try {
+        if (req.body.amenities && typeof req.body.amenities === 'string') {
+          amenities = JSON.parse(req.body.amenities);
+        }
+      } catch (parseError) {
+        console.warn('⚠️ Error parseando amenities:', parseError.message);
+        amenities = [];
+      }
 
-      // ✅ ACTUALIZADO con todos los nuevos campos
+      // Preparar datos de la terraza
       const terraceData = {
-        name: req.body.name,
-        description: req.body.description,
-        capacity: parseInt(req.body.capacity),
-        location: req.body.location,
-        price: parseFloat(req.body.price),
-        contactPhone: req.body.contactPhone,
-        contactEmail: req.body.contactEmail,
-        amenities: req.body.amenities ? JSON.parse(req.body.amenities) : []
+        name: req.body.name.trim(),
+        description: req.body.description.trim(),
+        capacity: parseInt(req.body.capacity) || 1,
+        location: req.body.location.trim(),
+        price: parseFloat(req.body.price) || 0,
+        contactPhone: req.body.contactPhone.trim(),
+        contactEmail: req.body.contactEmail.trim().toLowerCase(),
+        amenities: amenities,
+        rules: (req.body.rules || '').trim()
       };
 
-      const request = new PublicationRequest({
-        owner: ownerId,
-        terraceData,
-        photos,
-        documents,
-        userNotes: req.body.userNotes || '' // ✅ NUEVO - Notas opcionales del usuario
+      // Validaciones
+      if (terraceData.capacity <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'La capacidad debe ser mayor a 0'
+        });
+      }
+
+      if (terraceData.price <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'El precio debe ser mayor a 0'
+        });
+      }
+
+      console.log('📊 Datos listos para guardar en MongoDB:', {
+        name: terraceData.name,
+        capacity: terraceData.capacity,
+        price: terraceData.price,
+        photos: uploadedPhotos.length
       });
 
-      await request.save();
+      // CREAR Y GUARDAR EN MONGODB
+      const publicationRequest = new PublicationRequest({
+        owner: new mongoose.Types.ObjectId(ownerId),
+        terraceData: terraceData,
+        photos: uploadedPhotos,
+        status: 'pending',
+        createdAt: new Date()
+      });
+
+      console.log('💾 Guardando publicación en MongoDB...');
+      const savedRequest = await publicationRequest.save();
       
-      // ✅ NUEVO: Populate para mejor respuesta
-      await request.populate('owner', 'name email');
-      
+      // Popular datos para la respuesta
+      await savedRequest.populate('owner', 'name email phone');
+
+      console.log('🎉 Publicación guardada exitosamente en MongoDB:', savedRequest._id);
+
       res.status(201).json({ 
         success: true, 
-        message: 'Solicitud enviada para revisión',
-        data: request 
+        message: 'Terraza publicada exitosamente y enviada para revisión',
+        data: {
+          id: savedRequest._id,
+          terraceData: savedRequest.terraceData,
+          photos: savedRequest.photos,
+          status: savedRequest.status,
+          createdAt: savedRequest.createdAt,
+          owner: savedRequest.owner
+        }
       });
+
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ success: false, message: 'Error creando solicitud', error: err.message });
+      console.error('💥 ERROR guardando publicación:', err);
+      
+      if (err.name === 'ValidationError') {
+        const errors = Object.values(err.errors).map(e => e.message);
+        return res.status(400).json({
+          success: false,
+          message: 'Error de validación de datos',
+          errors: errors
+        });
+      }
+
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error interno del servidor',
+        error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      });
     }
   }
 
-  // ✅ NUEVO: Obtener mis propias solicitudes
   async getMyRequests(req, res) {
     try {
       const ownerId = req.user.id;
       const requests = await PublicationRequest.find({ owner: ownerId })
         .sort({ createdAt: -1 })
+        .populate('owner', 'name email phone')
         .populate('reviewedBy', 'name email');
       
-      res.json({ success: true, data: requests });
+      res.json({ 
+        success: true, 
+        data: requests
+      });
     } catch (err) {
-      res.status(500).json({ success: false, message: 'Error obteniendo solicitudes', error: err.message });
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error obteniendo solicitudes', 
+        error: err.message 
+      });
     }
   }
 
-  // admin lists requests (filter by status optional)
   async list(req, res) {
     try {
       const status = req.query.status;
       const filter = status ? { status } : {};
+      
       const list = await PublicationRequest.find(filter)
         .populate('owner', 'email name phone')
         .populate('reviewedBy', 'name email')
         .sort({ createdAt: -1 });
       
-      res.json({ success: true, data: list });
+      res.json({ 
+        success: true, 
+        data: list
+      });
     } catch (err) {
-      res.status(500).json({ success: false, message: 'Error obteniendo lista', error: err.message });
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error obteniendo lista', 
+        error: err.message 
+      });
     }
   }
 
   async getById(req, res) {
     try {
       const { id } = req.params;
+      
       if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ success: false, message: 'ID inválido' });
+        return res.status(400).json({ 
+          success: false, 
+          message: 'ID inválido' 
+        });
       }
       
-      const reqDoc = await PublicationRequest.findById(id)
+      const request = await PublicationRequest.findById(id)
         .populate('owner', 'email name phone')
         .populate('reviewedBy', 'name email');
         
-      if (!reqDoc) return res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+      if (!request) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Solicitud no encontrada' 
+        });
+      }
       
-      res.json({ success: true, data: reqDoc });
+      res.json({ success: true, data: request });
     } catch (err) {
-      res.status(500).json({ success: false, message: 'Error obteniendo solicitud', error: err.message });
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error obteniendo solicitud', 
+        error: err.message 
+      });
     }
   }
 
-  // approve -> crea la terraza con los datos y fotos (publicada)
   async approve(req, res) {
     try {
       const { id } = req.params;
-      const { adminNotes } = req.body; // ✅ NUEVO - Notas del admin
+      const { adminNotes } = req.body;
       
       const request = await PublicationRequest.findById(id);
       if (!request) {
-        return res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Solicitud no encontrada' 
+        });
       }
       
       if (request.status !== 'pending') {
-        return res.status(400).json({ success: false, message: 'Solicitud no está pendiente' });
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Solicitud no está pendiente' 
+        });
       }
 
-      const tdata = request.terraceData || {};
-      
-      // ✅ ACTUALIZADO con nueva estructura de Terrace
-      const terrace = new Terrace({
-        name: tdata.name,
-        description: tdata.description,
-        capacity: tdata.capacity,
-        location: tdata.location,
-        price: tdata.price,
-        contactPhone: tdata.contactPhone,
-        contactEmail: tdata.contactEmail,
-        amenities: tdata.amenities || [],
-        images: request.photos.map(p => ({
-          fileId: p.fileId,
-          filename: p.filename,
-          mimetype: p.mimetype,
-          isMain: false
-        })),
-        owner: request.owner,
-        status: 'published',
-        publicationRequest: request._id
-      });
-
-      await terrace.save();
-
-      // ✅ ACTUALIZADO con más campos
       request.status = 'approved';
       request.adminNotes = adminNotes || '';
       request.reviewedBy = req.user.id;
       request.reviewedAt = new Date();
-      request.terrace = terrace._id; // ✅ NUEVO - Relación directa
+      
       await request.save();
-
-      // TODO: Enviar notificación al usuario
-      // await this.sendApprovalNotification(request, terrace);
+      await request.populate('reviewedBy', 'name email');
 
       res.json({ 
         success: true, 
-        message: 'Solicitud aprobada y terraza publicada',
-        data: { request, terrace } 
+        message: 'Solicitud aprobada',
+        data: request 
       });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ success: false, message: 'Error aprobando solicitud', error: err.message });
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error aprobando solicitud', 
+        error: err.message 
+      });
     }
   }
 
-  // reject -> borrar fotos y docs de GridFS y marcar rejected
   async reject(req, res) {
     try {
       const { id } = req.params;
-      const { adminNotes } = req.body; // ✅ ACTUALIZADO nombre
+      const { adminNotes } = req.body;
       
       const request = await PublicationRequest.findById(id);
       if (!request) {
-        return res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Solicitud no encontrada' 
+        });
       }
       
       if (request.status !== 'pending') {
-        return res.status(400).json({ success: false, message: 'Solicitud no está pendiente' });
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Solicitud no está pendiente' 
+        });
       }
 
-      // ✅ OPCIONAL: Borrar archivos de GridFS (puedes comentar si quieres mantenerlos)
-      /*
-      const toDelete = [];
-      if (request.photos && request.photos.length) toDelete.push(...request.photos.map(p => p.fileId));
-      if (request.documents && request.documents.length) toDelete.push(...request.documents.map(d => d.fileId));
-
-      await Promise.all(toDelete.map(fid => this.imageService.deleteImage(fid).catch(() => {})));
-      */
-
-      // ✅ ACTUALIZADO con más campos
       request.status = 'rejected';
       request.adminNotes = adminNotes || '';
       request.reviewedBy = req.user.id;
       request.reviewedAt = new Date();
-      // ✅ Mantenemos los archivos por si necesitan revisión posterior
       await request.save();
-
-      // TODO: Enviar notificación al usuario
-      // await this.sendRejectionNotification(request);
+      
+      await request.populate('reviewedBy', 'name email');
 
       res.json({ 
         success: true, 
@@ -230,10 +333,163 @@ class PublicationRequestController {
         data: request 
       });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ success: false, message: 'Error rechazando solicitud', error: err.message });
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error rechazando solicitud', 
+        error: err.message 
+      });
     }
+  }
+
+  // ✅ NUEVO: Obtener todas las terrazas aprobadas para clientes
+  async getApprovedTerrazas(req, res) {
+    try {
+      console.log('🏠 Cargando terrazas aprobadas para home...');
+      
+      const approvedTerrazas = await PublicationRequest.find({ 
+        status: 'approved' 
+      })
+      .populate('owner', 'name email phone') // Info del dueño
+      .sort({ createdAt: -1 }); // Más recientes primero
+
+      console.log(`✅ Encontradas ${approvedTerrazas.length} terrazas aprobadas`);
+
+      // Transformar datos para el frontend
+      const terrazasFormateadas = approvedTerrazas.map(terraza => ({
+        id: terraza._id,
+        nombre: terraza.terraceData?.name || 'Terraza sin nombre',
+        ubicacion: terraza.terraceData?.location || 'Ubicación no especificada',
+        precio: terraza.terraceData?.price || 0,
+        calificacion: 4.5, // Puedes cambiar esto por reviews reales después
+        capacidad: terraza.terraceData?.capacity || 0,
+        imagen: this.getTerrazaImage(terraza),
+        categoria: this.getCategoria(terraza),
+        descripcion: terraza.terraceData?.description || 'Descripción no disponible',
+        amenities: terraza.terraceData?.amenities || [],
+        contacto: {
+          telefono: terraza.terraceData?.contactPhone,
+          email: terraza.terraceData?.contactEmail
+        },
+        propietario: terraza.owner?.name || 'Anfitrión'
+      }));
+
+      res.json({
+        success: true,
+        data: terrazasFormateadas,
+        count: terrazasFormateadas.length,
+        message: `${terrazasFormateadas.length} terrazas encontradas`
+      });
+
+    } catch (error) {
+      console.error('💥 Error cargando terrazas aprobadas:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al cargar las terrazas',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  // ✅ NUEVO: Obtener terraza específica por ID
+  async getTerrazaById(req, res) {
+    try {
+      const { id } = req.params;
+      
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'ID de terraza inválido' 
+        });
+      }
+      
+      const terraza = await PublicationRequest.findOne({ 
+        _id: id, 
+        status: 'approved' 
+      }).populate('owner', 'name email phone');
+      
+      if (!terraza) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Terraza no encontrada o no está aprobada' 
+        });
+      }
+
+      // Formatear respuesta
+      const terrazaFormateada = {
+        id: terraza._id,
+        nombre: terraza.terraceData?.name,
+        ubicacion: terraza.terraceData?.location,
+        precio: terraza.terraceData?.price,
+        calificacion: 4.5,
+        capacidad: terraza.terraceData?.capacity,
+        imagenes: terraza.photos.map(photo => this.getTerrazaImage(terraza, photo)),
+        categoria: this.getCategoria(terraza),
+        descripcion: terraza.terraceData?.description,
+        amenities: terraza.terraceData?.amenities || [],
+        reglas: terraza.terraceData?.rules,
+        contacto: {
+          telefono: terraza.terraceData?.contactPhone,
+          email: terraza.terraceData?.contactEmail
+        },
+        propietario: {
+          nombre: terraza.owner?.name,
+          email: terraza.owner?.email,
+          telefono: terraza.owner?.phone
+        },
+        fechaCreacion: terraza.createdAt
+      };
+
+      res.json({ 
+        success: true, 
+        data: terrazaFormateada 
+      });
+      
+    } catch (error) {
+      console.error('💥 Error obteniendo terraza:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error al obtener la terraza',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+
+  // ✅ MÉTODO AUXILIAR: Obtener imagen de terraza
+  getTerrazaImage(terraza, photo = null) {
+    try {
+      // Si se pasa una foto específica, usar esa
+      const foto = photo || (terraza.photos && terraza.photos[0]);
+      
+      if (foto && foto.filename) {
+        // Usar tu servicio de archivos local
+        const imageUrl = `http://localhost:4000/api/terrace-images/${foto.filename}`;
+        console.log('🖼️ URL de imagen generada:', imageUrl);
+        return imageUrl;
+      }
+      
+      // Imagen por defecto si no hay fotos
+      return "https://images.unsplash.com/photo-1549294413-26f195200c16?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80";
+      
+    } catch (error) {
+      console.error('❌ Error generando URL de imagen:', error);
+      return "https://images.unsplash.com/photo-1549294413-26f195200c16?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80";
+    }
+  }
+
+  // ✅ MÉTODO AUXILIAR: Determinar categoría
+  getCategoria(terraza) {
+    const price = terraza.terraceData?.price || 0;
+    const amenities = terraza.terraceData?.amenities || [];
+    const descripcion = (terraza.terraceData?.description || '').toLowerCase();
+    
+    if (price > 8000) return 'lujo';
+    if (amenities.includes('vista panorámica') || amenities.includes('rooftop') || descripcion.includes('vista')) return 'moderno';
+    if (amenities.includes('jardín') || amenities.includes('natural') || descripcion.includes('jardín')) return 'bohemio';
+    if (price < 4000) return 'economico';
+    if (descripcion.includes('rústico') || descripcion.includes('campo')) return 'rustico';
+    return 'popular';
   }
 }
 
+// ✅ EXPORTACIÓN CORRECTA - Esto es lo que estaba causando el error
 module.exports = PublicationRequestController;
