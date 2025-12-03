@@ -20,7 +20,6 @@ class PublicationRequestController {
     console.log('🚀 CREANDO PUBLICACIÓN CON LOCALFILESERVICE...');
     
     try {
-      // Verificar autenticación
       if (!req.user || !req.user.id) {
         return res.status(401).json({
           success: false,
@@ -30,10 +29,6 @@ class PublicationRequestController {
 
       const ownerId = req.user.id;
       
-      console.log('👤 Usuario:', ownerId);
-      console.log('📦 Campos recibidos:', Object.keys(req.body));
-
-      // Validar campos requeridos
       const requiredFields = ['name', 'description', 'capacity', 'location', 'price', 'contactPhone', 'contactEmail'];
       const missingFields = requiredFields.filter(field => !req.body[field]);
       
@@ -44,7 +39,7 @@ class PublicationRequestController {
         });
       }
 
-      // Procesar fotos con tu LocalFileService existente
+      // Procesar fotos
       const files = req.files || {};
       const photosFiles = files.photos || [];
       let uploadedPhotos = [];
@@ -57,16 +52,13 @@ class PublicationRequestController {
           console.log(`📸 Subiendo foto ${i + 1}: ${file.originalname}`);
           
           try {
-            // Leer el archivo temporal como buffer
             const fileBuffer = fs.readFileSync(file.path);
-            
-            // Usar tu LocalFileService existente (igual que para permisos)
             const savedFile = await localFileService.saveFile(fileBuffer, file.originalname);
             
             uploadedPhotos.push({
-              fileId: new mongoose.Types.ObjectId(), // ID único para referencia
+              fileId: new mongoose.Types.ObjectId(),
               filename: savedFile.fileName,
-              filePath: savedFile.filePath, // Ruta donde se guardó el archivo
+              filePath: savedFile.filePath,
               originalName: savedFile.originalName,
               mimetype: file.mimetype,
               fileType: 'image',
@@ -75,12 +67,11 @@ class PublicationRequestController {
             
             console.log(`✅ Foto ${i + 1} guardada:`, savedFile.fileName);
             
-            // Limpiar archivo temporal de multer
+            // Limpiar archivo temporal
             fs.unlinkSync(file.path);
             
           } catch (fileError) {
             console.error(`❌ Error subiendo foto ${i + 1}:`, fileError.message);
-            // Continuar con las demás fotos
           }
         }
       }
@@ -131,7 +122,7 @@ class PublicationRequestController {
         photos: uploadedPhotos.length
       });
 
-      // CREAR Y GUARDAR EN MONGODB
+      // Crear publicación
       const publicationRequest = new PublicationRequest({
         owner: new mongoose.Types.ObjectId(ownerId),
         terraceData: terraceData,
@@ -143,7 +134,6 @@ class PublicationRequestController {
       console.log('💾 Guardando publicación en MongoDB...');
       const savedRequest = await publicationRequest.save();
       
-      // Popular datos para la respuesta
       await savedRequest.populate('owner', 'name email phone');
 
       console.log('🎉 Publicación guardada exitosamente en MongoDB:', savedRequest._id);
@@ -341,7 +331,7 @@ class PublicationRequestController {
     }
   }
 
-  // ✅ NUEVO: Obtener todas las terrazas aprobadas para clientes
+  // ✅ Obtener todas las terrazas aprobadas
   async getApprovedTerrazas(req, res) {
     try {
       console.log('🏠 Cargando terrazas aprobadas para home...');
@@ -349,8 +339,8 @@ class PublicationRequestController {
       const approvedTerrazas = await PublicationRequest.find({ 
         status: 'approved' 
       })
-      .populate('owner', 'name email phone') // Info del dueño
-      .sort({ createdAt: -1 }); // Más recientes primero
+      .populate('owner', 'name email phone')
+      .sort({ createdAt: -1 });
 
       console.log(`✅ Encontradas ${approvedTerrazas.length} terrazas aprobadas`);
 
@@ -360,7 +350,7 @@ class PublicationRequestController {
         nombre: terraza.terraceData?.name || 'Terraza sin nombre',
         ubicacion: terraza.terraceData?.location || 'Ubicación no especificada',
         precio: terraza.terraceData?.price || 0,
-        calificacion: 4.5, // Puedes cambiar esto por reviews reales después
+        calificacion: 4.5,
         capacidad: terraza.terraceData?.capacity || 0,
         imagen: this.getTerrazaImage(terraza),
         categoria: this.getCategoria(terraza),
@@ -390,7 +380,7 @@ class PublicationRequestController {
     }
   }
 
-  // ✅ NUEVO: Obtener terraza específica por ID
+  // ✅ Obtener terraza específica por ID
   async getTerrazaById(req, res) {
     try {
       const { id } = req.params;
@@ -422,7 +412,7 @@ class PublicationRequestController {
         precio: terraza.terraceData?.price,
         calificacion: 4.5,
         capacidad: terraza.terraceData?.capacity,
-        imagenes: terraza.photos.map(photo => this.getTerrazaImage(terraza, photo)),
+        imagenes: terraza.photos.map(photo => this.getImageUrl(photo)),
         categoria: this.getCategoria(terraza),
         descripcion: terraza.terraceData?.description,
         amenities: terraza.terraceData?.amenities || [],
@@ -454,17 +444,13 @@ class PublicationRequestController {
     }
   }
 
-  // ✅ MÉTODO AUXILIAR: Obtener imagen de terraza
-  getTerrazaImage(terraza, photo = null) {
+  // ✅ MÉTODO CORREGIDO: Obtener imagen de terraza
+  getTerrazaImage(terraza) {
     try {
-      // Si se pasa una foto específica, usar esa
-      const foto = photo || (terraza.photos && terraza.photos[0]);
-      
-      if (foto && foto.filename) {
-        // Usar tu servicio de archivos local
-        const imageUrl = `http://localhost:4000/api/terrace-images/${foto.filename}`;
-        console.log('🖼️ URL de imagen generada:', imageUrl);
-        return imageUrl;
+      // Si hay fotos, usar la primera
+      if (terraza.photos && terraza.photos.length > 0) {
+        const primeraFoto = terraza.photos[0];
+        return this.getImageUrl(primeraFoto);
       }
       
       // Imagen por defecto si no hay fotos
@@ -474,6 +460,24 @@ class PublicationRequestController {
       console.error('❌ Error generando URL de imagen:', error);
       return "https://images.unsplash.com/photo-1549294413-26f195200c16?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80";
     }
+  }
+
+  // ✅ MÉTODO AUXILIAR: Generar URL completa para la imagen
+  getImageUrl(photo) {
+    if (!photo || !photo.filename) {
+      return "https://images.unsplash.com/photo-1549294413-26f195200c16?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80";
+    }
+    
+    // Si el filename ya es una URL completa, usarla
+    if (photo.filename.startsWith('http')) {
+      return photo.filename;
+    }
+    
+    // Generar URL local - IMPORTANTE: Usar la ruta correcta
+    const baseUrl = process.env.BASE_URL || 'http://localhost:4000';
+    
+    // Ruta: /uploads/images/filename.jpg
+    return `${baseUrl}/uploads/images/${photo.filename}`;
   }
 
   // ✅ MÉTODO AUXILIAR: Determinar categoría
@@ -491,5 +495,9 @@ class PublicationRequestController {
   }
 }
 
-// ✅ EXPORTACIÓN CORRECTA - Esto es lo que estaba causando el error
 module.exports = PublicationRequestController;
+
+
+
+
+// ------------------------------BIEEEEEEEEEEEEEEEEN
