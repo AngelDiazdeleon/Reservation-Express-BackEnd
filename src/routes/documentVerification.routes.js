@@ -1,48 +1,66 @@
 const express = require('express');
 const router = express.Router();
-const documentVerificationController = require('../controllers/documentVerification.controller');
-const { upload, handleMulterError } = require('../middleware/uploadMiddleware');
-const { requireAuth } = require('../middleware/auth'); // ✅ Asegúrate de tener esto
+const documentVerificationController = require('../controllers/documentVerificationController');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
-// ✅ PROTEGER TODAS LAS RUTAS CON AUTENTICACIÓN
-router.use(requireAuth);
+// ✅ RUTA PARA ADMIN - Obtener documentos de cualquier usuario
+router.get(
+  '/admin/user-documents/:userId',
+  requireAuth,
+  requireRole('admin'),
+  documentVerificationController.getUserDocumentsForAdmin
+);
 
-// Subir documentos
+// ✅ RUTA PARA CAMBIAR ESTADO DE DOCUMENTOS (ADMIN)
+router.patch(
+  '/:id/status',
+  requireAuth,
+  requireRole('admin'),
+  documentVerificationController.updateDocumentStatus
+);
+
+// RUTA 2: Para usuarios - Obtener sus propios documentos
+router.get(
+  '/my-documents',
+  requireAuth,
+  documentVerificationController.getMyDocuments
+);
+
+// RUTA 3: Para ADMIN - Cambiar estado de documentos
+router.patch(
+  '/:id/status',
+  requireAuth,
+  requireRole('admin'),
+  documentVerificationController.updateDocumentStatus
+);
+
+// RUTA 4: Subir documentos
 router.post(
   '/upload',
-  upload.array('documents', 10),
-  handleMulterError,
+  requireAuth,
+  upload.array('documents', 5), // Ajusta según tu middleware de upload
   documentVerificationController.uploadDocuments
 );
 
-// Descargar documento - YA ESTÁ PROTEGIDA POR router.use(requireAuth)
+// RUTA 5: Descargar documento
 router.get(
   '/download/:id',
+  requireAuth,
   documentVerificationController.downloadDocument
 );
 
-// Obtener documentos del usuario
-router.get(
-  '/user-documents',
-  documentVerificationController.getUserDocuments
-);
-
-// Obtener documento por ID
-router.get(
-  '/:id',
-  documentVerificationController.getDocumentById
-);
-
-// Eliminar documento
+// RUTA 6: Eliminar documento
 router.delete(
   '/:id',
+  requireAuth,
   documentVerificationController.deleteDocument
 );
 
-// Actualizar estado del documento
-router.put(
-  '/update-status/:id',
-  documentVerificationController.updateDocumentStatus
+// RUTA 7: Obtener documento por ID
+router.get(
+  '/:id',
+  requireAuth,
+  documentVerificationController.getDocumentById
 );
 
 module.exports = router;
