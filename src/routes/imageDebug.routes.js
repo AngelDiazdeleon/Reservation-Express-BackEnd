@@ -1,51 +1,39 @@
-// routes/imageDebug.routes.js (temporal)
+// routes/imageDebug.routes.js
 const express = require('express');
 const router = express.Router();
-const localFileService = require('../services/localFile.service');
 const fs = require('fs');
 const path = require('path');
 
-// Ruta para verificar archivos
-router.get('/check-file/:filename', (req, res) => {
+router.get('/check-uploads', (req, res) => {
   try {
-    const { filename } = req.params;
-    const filePath = path.join(localFileService.uploadsDir, filename);
-    const exists = fs.existsSync(filePath);
+    const uploadsPath = path.join(__dirname, '../../uploads');
+    const imagesPath = path.join(uploadsPath, 'images');
     
-    console.log('🔍 Verificando archivo:', {
-      filename,
-      filePath,
-      exists,
-      uploadsDir: localFileService.uploadsDir
-    });
+    const uploadsExists = fs.existsSync(uploadsPath);
+    const imagesExists = fs.existsSync(imagesPath);
+    
+    let files = [];
+    if (imagesExists) {
+      files = fs.readdirSync(imagesPath);
+    }
     
     res.json({
       success: true,
-      filename: filename,
-      filePath: filePath,
-      exists: exists,
-      uploadsDir: localFileService.uploadsDir
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Listar todos los archivos
-router.get('/list-files', (req, res) => {
-  try {
-    const uploadsDir = localFileService.uploadsDir;
-    const files = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
-    
-    res.json({
-      success: true,
-      uploadsDir: uploadsDir,
-      files: files,
-      totalFiles: files.length,
-      directoryExists: fs.existsSync(uploadsDir)
+      uploads: {
+        path: uploadsPath,
+        exists: uploadsExists
+      },
+      images: {
+        path: imagesPath,
+        exists: imagesExists,
+        files: files,
+        count: files.length
+      },
+      urlExample: 'http://localhost:4000/uploads/images/' + (files[0] || 'filename.jpg'),
+      serverInfo: {
+        port: process.env.PORT || 4000,
+        baseUrl: process.env.BASE_URL || 'http://localhost:4000'
+      }
     });
   } catch (error) {
     res.status(500).json({

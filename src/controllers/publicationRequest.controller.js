@@ -1,9 +1,10 @@
-// controllers/publicationRequest.controller.js
 const mongoose = require('mongoose');
 const PublicationRequest = require('../models/PublicationRequest');
+const DocumentVerification = require('../models/documentVerification'); // ✅ AGREGAR ESTA IMPORTACIÓN
 const localFileService = require('../services/localFile.service');
 const RealTimeService = require('../services/realTime.service');
 const fs = require('fs');
+const path = require('path');
 
 class PublicationRequestController {
   constructor() {
@@ -15,10 +16,153 @@ class PublicationRequestController {
     this.getMyRequests = this.getMyRequests.bind(this);
     this.getApprovedTerrazas = this.getApprovedTerrazas.bind(this);
     this.getTerrazaById = this.getTerrazaById.bind(this);
+    this.getPendingForAdmin = this.getPendingForAdmin.bind(this); // ✅ NUEVO MÉTODO
+    this.getUserDocuments = this.getUserDocuments.bind(this); // ✅ NUEVO MÉTODO
   }
 
+  // ✅ MÉTODO NUEVO: Obtener terrazas pendientes para administrador
+  async getPendingForAdmin(req, res) {
+    try {
+      console.log('📋 [ADMIN] Obteniendo terrazas pendientes...');
+
+      // Verificar que sea admin
+      if (req.user.role !== 'admin') {
+        console.log('❌ Acceso denegado: Usuario no es admin');
+        return res.status(403).json({
+          success: false,
+          message: 'Acceso denegado. Se requieren permisos de administrador.'
+        });
+      }
+
+      // Obtener todas las solicitudes pendientes o rechazadas
+      const pendingRequests = await PublicationRequest.find({
+        status: { $in: ['pending', 'rejected'] }
+      })
+      .populate('owner', 'name email phone')
+      .populate('reviewedBy', 'name email')
+      .sort({ createdAt: -1 });
+
+      console.log(`✅ [ADMIN] Encontradas ${pendingRequests.length} solicitudes`);
+
+      // Para cada solicitud, obtener los documentos del propietario
+      const requestsWithDocuments = await Promise.all(
+        pendingRequests.map(async (request) => {
+          // Obtener documentos del propietario desde DocumentVerification
+          const documents = await DocumentVerification.find({
+            userId: request.owner._id.toString()
+          }).sort({ uploadDate: -1 });
+
+          return {
+            _id: request._id,
+            name: request.terraceData?.name || 'Sin nombre',
+            description: request.terraceData?.description || 'Sin descripción',
+            owner: {
+              _id: request.owner._id,
+              name: request.owner.name,
+              email: request.owner.email,
+              phone: request.owner.phone
+            },
+            location: request.terraceData?.location || 'Sin ubicación',
+            capacity: request.terraceData?.capacity || 0,
+            price: request.terraceData?.price || 0,
+            status: request.status,
+            adminNotes: request.adminNotes,
+            reviewedBy: request.reviewedBy,
+            reviewedAt: request.reviewedAt,
+            createdAt: request.createdAt,
+            updatedAt: request.updatedAt,
+            documents: documents.map(doc => ({
+              _id: doc._id,
+              fileName: doc.fileName,
+              category: doc.category,
+              status: doc.status,
+              uploadDate: doc.uploadDate,
+              adminNotes: doc.adminNotes,
+              reviewDate: doc.reviewDate,
+              mimeType: doc.mimeType,
+              fileSize: doc.fileSize,
+              // URL para descargar el documento
+              downloadUrl: `/api/document-verification/download/${doc._id}`
+            })),
+            // Información adicional
+            contactPhone: request.terraceData?.contactPhone,
+            contactEmail: request.terraceData?.contactEmail,
+            amenities: request.terraceData?.amenities || [],
+            photos: request.photos || [],
+            rules: request.terraceData?.rules || ''
+          };
+        })
+      );
+
+      res.json({
+        success: true,
+        terraces: requestsWithDocuments,
+        count: requestsWithDocuments.length,
+        stats: {
+          pending: pendingRequests.filter(r => r.status === 'pending').length,
+          rejected: pendingRequests.filter(r => r.status === 'rejected').length,
+          total: pendingRequests.length
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ [ADMIN] Error obteniendo terrazas pendientes:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error interno al obtener terrazas pendientes',
+        error: error.message
+      });
+    }
+  }
+
+  // ✅ MÉTODO NUEVO: Obtener documentos de un usuario específico
+  async getUserDocuments(req, res) {
+    try {
+      const { userId } = req.params;
+
+      // Verificar que sea admin
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({
+          success: false,
+          message: 'Acceso denegado'
+        });
+      }
+
+      console.log(`📋 [ADMIN] Obteniendo documentos del usuario: ${userId}`);
+
+      const documents = await DocumentVerification.find({ userId })
+        .sort({ uploadDate: -1 });
+
+      res.json({
+        success: true,
+        documents: documents.map(doc => ({
+          _id: doc._id,
+          fileName: doc.fileName,
+          category: doc.category,
+          status: doc.status,
+          uploadDate: doc.uploadDate,
+          adminNotes: doc.adminNotes,
+          reviewDate: doc.reviewDate,
+          mimeType: doc.mimeType,
+          fileSize: doc.fileSize,
+          downloadUrl: `/api/document-verification/download/${doc._id}`
+        })),
+        count: documents.length
+      });
+
+    } catch (error) {
+      console.error('❌ [ADMIN] Error obteniendo documentos:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener documentos',
+        error: error.message
+      });
+    }
+  }
+
+  // ✅ MÉTODO PARA CREAR PUBLICACIÓN (EXISTENTE - MODIFICADO)
   async create(req, res) {
-    console.log('🚀 CREANDO PUBLICACIÓN CON LOCALFILESERVICE...');
+    console.log('🚀 CREANDO PUBLICACIÓN...');
     
     try {
       // Verificar autenticación
@@ -30,11 +174,38 @@ class PublicationRequestController {
       }
 
       const ownerId = req.user.id;
+      const ownerRole = req.user.role;
       
-      console.log('👤 Usuario:', ownerId);
+      console.log('👤 Usuario:', ownerId, 'Rol:', ownerRole);
       console.log('📦 Campos recibidos:', Object.keys(req.body));
 
-      // OBTENER DATOS DEL USUARIO PARA NOTIFICACIONES
+      // Si el usuario no es host, verificar que tenga documentos aprobados
+      if (ownerRole === 'user') {
+        console.log('🔍 Verificando documentos del usuario...');
+        const userDocuments = await DocumentVerification.find({
+          userId: ownerId,
+          status: 'approved'
+        });
+
+        const requiredDocs = ['identificacion', 'permisos_terrazas', 'comprobante_domicilio'];
+        const missingDocs = requiredDocs.filter(docType => 
+          !userDocuments.some(doc => doc.category === docType && doc.status === 'approved')
+        );
+
+        if (missingDocs.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Documentos pendientes de aprobación',
+            details: `Faltan documentos aprobados: ${missingDocs.join(', ')}`,
+            requiredDocuments: requiredDocs,
+            approvedDocuments: userDocuments.map(doc => doc.category)
+          });
+        }
+
+        console.log('✅ Todos los documentos están aprobados');
+      }
+
+      // Obtener datos del usuario para notificaciones
       const User = require('../models/User');
       const user = await User.findById(ownerId);
 
@@ -49,12 +220,12 @@ class PublicationRequestController {
         });
       }
 
-      // Procesar fotos con tu LocalFileService existente
+      // Procesar fotos
       const files = req.files || {};
       const photosFiles = files.photos || [];
       let uploadedPhotos = [];
 
-      console.log(`🖼️ Procesando ${photosFiles.length} fotos con LocalFileService...`);
+      console.log(`🖼️ Procesando ${photosFiles.length} fotos...`);
 
       if (photosFiles.length > 0) {
         for (let i = 0; i < photosFiles.length; i++) {
@@ -62,16 +233,13 @@ class PublicationRequestController {
           console.log(`📸 Subiendo foto ${i + 1}: ${file.originalname}`);
           
           try {
-            // Leer el archivo temporal como buffer
             const fileBuffer = fs.readFileSync(file.path);
-            
-            // Usar tu LocalFileService existente (igual que para permisos)
             const savedFile = await localFileService.saveFile(fileBuffer, file.originalname);
             
             uploadedPhotos.push({
-              fileId: new mongoose.Types.ObjectId(), // ID único para referencia
+              fileId: new mongoose.Types.ObjectId(),
               filename: savedFile.fileName,
-              filePath: savedFile.filePath, // Ruta donde se guardó el archivo
+              filePath: savedFile.filePath,
               originalName: savedFile.originalName,
               mimetype: file.mimetype,
               fileType: 'image',
@@ -79,8 +247,8 @@ class PublicationRequestController {
             });
             
             console.log(`✅ Foto ${i + 1} guardada:`, savedFile.fileName);
-            
-            // Limpiar archivo temporal de multer
+
+            // Limpiar archivo temporal
             fs.unlinkSync(file.path);
             
           } catch (fileError) {
@@ -95,6 +263,8 @@ class PublicationRequestController {
       try {
         if (req.body.amenities && typeof req.body.amenities === 'string') {
           amenities = JSON.parse(req.body.amenities);
+        } else if (Array.isArray(req.body.amenities)) {
+          amenities = req.body.amenities;
         }
       } catch (parseError) {
         console.warn('⚠️ Error parseando amenities:', parseError.message);
@@ -114,7 +284,7 @@ class PublicationRequestController {
         rules: (req.body.rules || '').trim()
       };
 
-      // Validaciones
+      // Validaciones adicionales
       if (terraceData.capacity <= 0) {
         return res.status(400).json({
           success: false,
@@ -129,14 +299,21 @@ class PublicationRequestController {
         });
       }
 
-      console.log('📊 Datos listos para guardar en MongoDB:', {
+      if (terraceData.description.length < 10) {
+        return res.status(400).json({
+          success: false,
+          message: 'La descripción debe tener al menos 10 caracteres'
+        });
+      }
+
+      console.log('📊 Datos listos para guardar:', {
         name: terraceData.name,
         capacity: terraceData.capacity,
         price: terraceData.price,
         photos: uploadedPhotos.length
       });
 
-      // CREAR Y GUARDAR EN MONGODB
+      // Crear y guardar publicación
       const publicationRequest = new PublicationRequest({
         owner: new mongoose.Types.ObjectId(ownerId),
         terraceData: terraceData,
@@ -148,14 +325,15 @@ class PublicationRequestController {
       console.log('💾 Guardando publicación en MongoDB...');
       const savedRequest = await publicationRequest.save();
       
-      // 1️⃣ NOTIFICACIÓN A ADMINS - Nueva solicitud de terraza
+      // Notificación a administradores - Nueva solicitud de terraza
       await RealTimeService.notifyAdminsNewTerraceRequest(
         {
           id: savedRequest._id,
           name: terraceData.name,
           location: terraceData.location,
           price: terraceData.price,
-          capacity: terraceData.capacity
+          capacity: terraceData.capacity,
+          ownerName: user.name
         },
         user
       );
@@ -163,7 +341,7 @@ class PublicationRequestController {
       // Popular datos para la respuesta
       await savedRequest.populate('owner', 'name email phone');
 
-      console.log('🎉 Publicación guardada exitosamente en MongoDB:', savedRequest._id);
+      console.log('🎉 Publicación guardada exitosamente:', savedRequest._id);
 
       res.status(201).json({ 
         success: true, 
@@ -178,7 +356,8 @@ class PublicationRequestController {
           photos: savedRequest.photos,
           status: savedRequest.status,
           createdAt: savedRequest.createdAt,
-          owner: savedRequest.owner
+          owner: savedRequest.owner,
+          reviewLink: `/admin/publications/${savedRequest._id}`
         }
       });
 
@@ -202,42 +381,46 @@ class PublicationRequestController {
     }
   }
 
-  async getMyRequests(req, res) {
-    try {
-      const ownerId = req.user.id;
-      const requests = await PublicationRequest.find({ owner: ownerId })
-        .sort({ createdAt: -1 })
-        .populate('owner', 'name email phone')
-        .populate('reviewedBy', 'name email');
-      
-      res.json({ 
-        success: true, 
-        data: requests
-      });
-    } catch (err) {
-      res.status(500).json({ 
-        success: false, 
-        message: 'Error obteniendo solicitudes', 
-        error: err.message 
-      });
-    }
-  }
-
+  // ✅ MÉTODO PARA LISTAR SOLICITUDES (ADMIN)
   async list(req, res) {
     try {
       const status = req.query.status;
       const filter = status ? { status } : {};
       
+      console.log('📋 [ADMIN] Listando publicaciones, filtro:', filter);
+
       const list = await PublicationRequest.find(filter)
-        .populate('owner', 'email name phone')
+        .populate('owner', 'name email phone')
         .populate('reviewedBy', 'name email')
         .sort({ createdAt: -1 });
       
+      // Para cada publicación, agregar información de documentos
+      const listWithDocs = await Promise.all(
+        list.map(async (publication) => {
+          const documents = await DocumentVerification.find({
+            userId: publication.owner._id.toString()
+          });
+
+          return {
+            ...publication.toObject(),
+            documents: documents.map(doc => ({
+              _id: doc._id,
+              category: doc.category,
+              status: doc.status,
+              fileName: doc.fileName,
+              uploadDate: doc.uploadDate
+            }))
+          };
+        })
+      );
+
       res.json({ 
         success: true, 
-        data: list
+        data: listWithDocs,
+        count: listWithDocs.length
       });
     } catch (err) {
+      console.error('❌ Error obteniendo lista:', err);
       res.status(500).json({ 
         success: false, 
         message: 'Error obteniendo lista', 
@@ -246,6 +429,7 @@ class PublicationRequestController {
     }
   }
 
+  // ✅ MÉTODO PARA OBTENER POR ID (ADMIN)
   async getById(req, res) {
     try {
       const { id } = req.params;
@@ -258,7 +442,7 @@ class PublicationRequestController {
       }
       
       const request = await PublicationRequest.findById(id)
-        .populate('owner', 'email name phone')
+        .populate('owner', 'name email phone')
         .populate('reviewedBy', 'name email');
         
       if (!request) {
@@ -267,9 +451,31 @@ class PublicationRequestController {
           message: 'Solicitud no encontrada' 
         });
       }
+
+      // Obtener documentos del propietario
+      const documents = await DocumentVerification.find({
+        userId: request.owner._id.toString()
+      }).sort({ uploadDate: -1 });
+
+      const responseData = {
+        ...request.toObject(),
+        documents: documents.map(doc => ({
+          _id: doc._id,
+          fileName: doc.fileName,
+          category: doc.category,
+          status: doc.status,
+          uploadDate: doc.uploadDate,
+          adminNotes: doc.adminNotes,
+          downloadUrl: `/api/document-verification/download/${doc._id}`
+        }))
+      };
       
-      res.json({ success: true, data: request });
+      res.json({ 
+        success: true, 
+        data: responseData 
+      });
     } catch (err) {
+      console.error('❌ Error obteniendo solicitud:', err);
       res.status(500).json({ 
         success: false, 
         message: 'Error obteniendo solicitud', 
@@ -278,12 +484,14 @@ class PublicationRequestController {
     }
   }
 
+  // ✅ MÉTODO PARA APROBAR (ADMIN)
   async approve(req, res) {
     try {
       const { id } = req.params;
       const { adminNotes } = req.body;
       
-      // Obtener solicitud con datos del dueño
+      console.log(`✅ [ADMIN] Aprobando publicación ${id}`);
+
       const request = await PublicationRequest.findById(id).populate('owner');
       if (!request) {
         return res.status(404).json({ 
@@ -299,7 +507,7 @@ class PublicationRequestController {
         });
       }
 
-      const oldStatus = request.status;
+      // Actualizar estado
       request.status = 'approved';
       request.adminNotes = adminNotes || '';
       request.reviewedBy = req.user.id;
@@ -308,19 +516,21 @@ class PublicationRequestController {
       await request.save();
       await request.populate('reviewedBy', 'name email');
 
-      // 2️⃣ NOTIFICACIÓN AL HOST - Terraza aprobada
+      // Notificación al host
       await RealTimeService.notifyHostTerraceStatus(
         request.owner._id,
-        {
-          id: request._id,
-          name: request.terraceData.name
+        { 
+          id: request._id, 
+          name: request.terraceData.name,
+          location: request.terraceData.location,
+          price: request.terraceData.price
         },
         'approved',
         req.user.name || 'Administrador',
         adminNotes
       );
 
-      // 3️⃣ NOTIFICACIÓN A CLIENTES - Nueva terraza publicada
+      // Notificación a clientes
       await RealTimeService.notifyClientsNewTerracePublished({
         id: request._id,
         name: request.terraceData.name,
@@ -328,19 +538,34 @@ class PublicationRequestController {
         price: request.terraceData.price,
         capacity: request.terraceData.capacity,
         amenities: request.terraceData.amenities || [],
-        hostName: request.owner.name
+        hostName: request.owner.name,
+        description: request.terraceData.description,
+        imageUrl: this.getImageUrl(request.photos[0])
+      });
+
+      // Obtener documentos actualizados para la respuesta
+      const documents = await DocumentVerification.find({
+        userId: request.owner._id.toString()
       });
 
       res.json({ 
         success: true, 
-        message: 'Solicitud aprobada',
+        message: 'Solicitud aprobada exitosamente',
         notification: {
           type: 'approved',
-          message: `La terraza ha sido aprobada y notificada a los clientes`
+          message: `La terraza "${request.terraceData.name}" ha sido aprobada`
         },
-        data: request 
+        data: {
+          ...request.toObject(),
+          documents: documents.map(doc => ({
+            _id: doc._id,
+            category: doc.category,
+            status: doc.status
+          }))
+        }
       });
     } catch (err) {
+      console.error('❌ Error aprobando solicitud:', err);
       res.status(500).json({ 
         success: false, 
         message: 'Error aprobando solicitud', 
@@ -349,12 +574,14 @@ class PublicationRequestController {
     }
   }
 
+  // ✅ MÉTODO PARA RECHAZAR (ADMIN)
   async reject(req, res) {
     try {
       const { id } = req.params;
       const { adminNotes } = req.body;
       
-      // Obtener solicitud con datos del dueño
+      console.log(`❌ [ADMIN] Rechazando publicación ${id}`);
+
       const request = await PublicationRequest.findById(id).populate('owner');
       if (!request) {
         return res.status(404).json({ 
@@ -370,7 +597,7 @@ class PublicationRequestController {
         });
       }
 
-      const oldStatus = request.status;
+      // Actualizar estado
       request.status = 'rejected';
       request.adminNotes = adminNotes || '';
       request.reviewedBy = req.user.id;
@@ -379,12 +606,12 @@ class PublicationRequestController {
       
       await request.populate('reviewedBy', 'name email');
 
-      // 2️⃣ NOTIFICACIÓN AL HOST - Terraza rechazada
+      // Notificación al host
       await RealTimeService.notifyHostTerraceStatus(
         request.owner._id,
-        {
-          id: request._id,
-          name: request.terraceData.name
+        { 
+          id: request._id, 
+          name: request.terraceData.name 
         },
         'rejected',
         req.user.name || 'Administrador',
@@ -393,7 +620,7 @@ class PublicationRequestController {
 
       res.json({ 
         success: true, 
-        message: 'Solicitud rechazada',
+        message: 'Solicitud rechazada exitosamente',
         notification: {
           type: 'rejected',
           message: 'El host ha sido notificado del rechazo'
@@ -401,6 +628,7 @@ class PublicationRequestController {
         data: request 
       });
     } catch (err) {
+      console.error('❌ Error rechazando solicitud:', err);
       res.status(500).json({ 
         success: false, 
         message: 'Error rechazando solicitud', 
@@ -409,7 +637,33 @@ class PublicationRequestController {
     }
   }
 
-  // ✅ NUEVO: Obtener todas las terrazas aprobadas para clientes
+  // ✅ MÉTODO PARA OBTENER MIS SOLICITUDES (OWNER)
+  async getMyRequests(req, res) {
+    try {
+      const ownerId = req.user.id;
+      console.log(`📋 Obteniendo solicitudes del usuario: ${ownerId}`);
+
+      const requests = await PublicationRequest.find({ owner: ownerId })
+        .sort({ createdAt: -1 })
+        .populate('owner', 'name email phone')
+        .populate('reviewedBy', 'name email');
+      
+      res.json({ 
+        success: true, 
+        data: requests,
+        count: requests.length
+      });
+    } catch (err) {
+      console.error('❌ Error obteniendo solicitudes:', err);
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error obteniendo solicitudes', 
+        error: err.message 
+      });
+    }
+  }
+
+  // ✅ MÉTODO PARA OBTENER TERRENOS APROBADOS (PÚBLICO)
   async getApprovedTerrazas(req, res) {
     try {
       console.log('🏠 Cargando terrazas aprobadas para home...');
@@ -417,20 +671,20 @@ class PublicationRequestController {
       const approvedTerrazas = await PublicationRequest.find({ 
         status: 'approved' 
       })
-      .populate('owner', 'name email phone') // Info del dueño
-      .sort({ createdAt: -1 }); // Más recientes primero
+      .populate('owner', 'name email phone')
+      .sort({ createdAt: -1 });
 
       console.log(`✅ Encontradas ${approvedTerrazas.length} terrazas aprobadas`);
 
-      // Transformar datos para el frontend
       const terrazasFormateadas = approvedTerrazas.map(terraza => ({
         id: terraza._id,
         nombre: terraza.terraceData?.name || 'Terraza sin nombre',
         ubicacion: terraza.terraceData?.location || 'Ubicación no especificada',
         precio: terraza.terraceData?.price || 0,
-        calificacion: 4.5, // Puedes cambiar esto por reviews reales después
+        calificacion: 4.5,
         capacidad: terraza.terraceData?.capacity || 0,
-        imagen: this.getTerrazaImage(terraza),
+        imagen: this.getImageUrl(terraza.photos[0]),
+        imagenes: terraza.photos.map(photo => this.getImageUrl(photo)),
         categoria: this.getCategoria(terraza),
         descripcion: terraza.terraceData?.description || 'Descripción no disponible',
         amenities: terraza.terraceData?.amenities || [],
@@ -438,7 +692,12 @@ class PublicationRequestController {
           telefono: terraza.terraceData?.contactPhone,
           email: terraza.terraceData?.contactEmail
         },
-        propietario: terraza.owner?.name || 'Anfitrión'
+        propietario: terraza.owner?.name || 'Anfitrión',
+        propietarioInfo: {
+          nombre: terraza.owner?.name,
+          email: terraza.owner?.email,
+          telefono: terraza.owner?.phone
+        }
       }));
 
       res.json({
@@ -458,7 +717,7 @@ class PublicationRequestController {
     }
   }
 
-  // ✅ NUEVO: Obtener terraza específica por ID
+  // ✅ MÉTODO PARA OBTENER TERRENO POR ID (PÚBLICO)
   async getTerrazaById(req, res) {
     try {
       const { id } = req.params;
@@ -482,7 +741,6 @@ class PublicationRequestController {
         });
       }
 
-      // Formatear respuesta
       const terrazaFormateada = {
         id: terraza._id,
         nombre: terraza.terraceData?.name,
@@ -490,7 +748,7 @@ class PublicationRequestController {
         precio: terraza.terraceData?.price,
         calificacion: 4.5,
         capacidad: terraza.terraceData?.capacity,
-        imagenes: terraza.photos.map(photo => this.getTerrazaImage(terraza, photo)),
+        imagenes: terraza.photos.map(photo => this.getImageUrl(photo)),
         categoria: this.getCategoria(terraza),
         descripcion: terraza.terraceData?.description,
         amenities: terraza.terraceData?.amenities || [],
@@ -502,9 +760,11 @@ class PublicationRequestController {
         propietario: {
           nombre: terraza.owner?.name,
           email: terraza.owner?.email,
-          telefono: terraza.owner?.phone
+          telefono: terraza.owner?.phone,
+          verificado: true // Puedes agregar lógica de verificación
         },
-        fechaCreacion: terraza.createdAt
+        fechaCreacion: terraza.createdAt,
+        ultimaActualizacion: terraza.updatedAt
       };
 
       res.json({ 
@@ -522,26 +782,25 @@ class PublicationRequestController {
     }
   }
 
-  // ✅ MÉTODO AUXILIAR: Obtener imagen de terraza
-  getTerrazaImage(terraza, photo = null) {
-    try {
-      // Si se pasa una foto específica, usar esa
-      const foto = photo || (terraza.photos && terraza.photos[0]);
-      
-      if (foto && foto.filename) {
-        // Usar tu servicio de archivos local
-        const imageUrl = `http://localhost:4000/api/terrace-images/${foto.filename}`;
-        console.log('🖼️ URL de imagen generada:', imageUrl);
-        return imageUrl;
-      }
-      
-      // Imagen por defecto si no hay fotos
-      return "https://images.unsplash.com/photo-1549294413-26f195200c16?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80";
-      
-    } catch (error) {
-      console.error('❌ Error generando URL de imagen:', error);
-      return "https://images.unsplash.com/photo-1549294413-26f195200c16?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80";
+  // ✅ MÉTODO AUXILIAR: Obtener URL de imagen
+  getImageUrl(photo) {
+    if (!photo || !photo.filename) {
+      return "https://images.unsplash.com/photo-1549294413-26f195200c16?w=400&auto=format&fit=crop&q=80";
     }
+    
+    if (photo.filename.startsWith('http')) {
+      return photo.filename;
+    }
+    
+    const baseUrl = process.env.BASE_URL || 'http://localhost:4000';
+    
+    // Verificar si es una imagen de terraza
+    if (photo.filename.includes('terrace_') || photo.filePath.includes('terrace-images')) {
+      return `${baseUrl}/api/terrace-images/${photo.filename}`;
+    }
+    
+    // Imagen por defecto
+    return `${baseUrl}/uploads/images/${photo.filename}`;
   }
 
   // ✅ MÉTODO AUXILIAR: Determinar categoría
