@@ -1,4 +1,4 @@
-// auth.js - SOLO AGREGAMOS, NO QUITAMOS NADA
+// auth.js - MANTÉN ESTE ARCHIVO COMO ESTÁ
 const jwt = require('jsonwebtoken');
 
 function requireAuth(req, res, next) {
