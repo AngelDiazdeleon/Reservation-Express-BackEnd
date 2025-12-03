@@ -13,7 +13,7 @@ async function startServer() {
     console.log('GridFS inicializado');
 
     app.listen(PORT, () => {
-      console.log(`Servidor corriendo en http://localhost:${PORT}`);
+      console.log('Servidor corriendo en http://localhost:${PORT}');
     });
   } catch (error) {
     console.error('Error iniciando servidor:', error);

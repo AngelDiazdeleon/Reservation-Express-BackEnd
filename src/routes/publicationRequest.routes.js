@@ -1,4 +1,3 @@
-// En routes/publicationRequest.routes.js - AGREGAR ESTAS RUTAS
 const express = require('express');
 const router = express.Router();
 const publicationUpload = require('../middleware/PublicationUpload');
@@ -7,7 +6,11 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 
 const controller = new PublicationRequestController();
 
-// Owner crea solicitud
+// 🔹 RUTAS PÚBLICAS (sin autenticación)
+router.get('/public/approved', controller.getApprovedTerrazas);
+router.get('/public/:id', controller.getTerrazaById);
+
+// 🔹 RUTAS PARA HOSTS (requiere autenticación y rol host)
 router.post(
   '/',
   requireAuth,
@@ -16,19 +19,55 @@ router.post(
   controller.create
 );
 
-// Owner ve sus solicitudes
-router.get('/my/requests', requireAuth, controller.getMyRequests);
+router.get('/my/requests', 
+  requireAuth, 
+  requireRole('host'), 
+  controller.getMyRequests
+);
 
-// ✅ NUEVO: Clientes ven todas las terrazas aprobadas (sin autenticación)
-router.get('/public/approved', controller.getApprovedTerrazas);
+// 🔹 RUTAS PARA ADMINISTRADORES
+// Listar todas las publicaciones (con filtros)
+router.get('/', 
+  requireAuth, 
+  requireRole('admin'), 
+  controller.list
+);
 
-// ✅ NUEVO: Clientes ven terraza específica por ID (sin autenticación)
-router.get('/public/:id', controller.getTerrazaById);
+// Obtener publicación específica
+router.get('/:id', 
+  requireAuth, 
+  requireRole('admin'), 
+  controller.getById
+);
 
-// Admin routes
-router.get('/', requireAuth, requireRole('admin'), controller.list);
-router.get('/:id', requireAuth, requireRole('admin'), controller.getById);
-router.patch('/:id/approve', requireAuth, requireRole('admin'), express.json(), controller.approve);
-router.patch('/:id/reject', requireAuth, requireRole('admin'), express.json(), controller.reject);
+// Aprobar publicación
+router.patch('/:id/approve', 
+  requireAuth, 
+  requireRole('admin'), 
+  express.json(), 
+  controller.approve
+);
+
+// Rechazar publicación
+router.patch('/:id/reject', 
+  requireAuth, 
+  requireRole('admin'), 
+  express.json(), 
+  controller.reject
+);
+
+// ✅ NUEVA RUTA: Obtener terrazas pendientes para admin (con documentos)
+router.get('/admin/pending', 
+  requireAuth, 
+  requireRole('admin'), 
+  controller.getPendingForAdmin
+);
+
+// ✅ NUEVA RUTA: Obtener documentos de un usuario específico
+router.get('/admin/user-documents/:userId', 
+  requireAuth, 
+  requireRole('admin'), 
+  controller.getUserDocuments
+);
 
 module.exports = router;
