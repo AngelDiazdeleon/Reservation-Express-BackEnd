@@ -1,21 +1,19 @@
-// app.js
+// app.js (versión limpia)
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
 const imageService = require('./services/image.service');
 
-// Importar rutas
-
-;
-
+// Importar rutas que SÍ tenías originalmente
 const authRoutes = require('./routes/auth.routes');
 const publicationRequestRoutes = require('./routes/publicationRequest.routes');
 const reservationRoutes = require('./routes/reservation.routes');
 const userRoutes = require('./routes/user.routes');
 const documentVerificationRoutes = require('./routes/documentVerification.routes');
-// En app.js - AGREGAR ESTA LÍNEA
 const terraceImagesRoutes = require('./routes/terraceImages.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
+
 const app = express();
 
 // Middlewares
@@ -30,8 +28,6 @@ mongoose.connection.once('open', () => {
   console.log('✅ GridFS inicializado para almacenar archivos');
 });
 
-
-
 // Ruta de salud
 app.get('/', (req, res) => res.json({ 
   ok: true, 
@@ -40,13 +36,14 @@ app.get('/', (req, res) => res.json({
   message: '🚀 Servidor funcionando correctamente'
 }));
 
-// Registrar rutas
+// Registrar SOLO las rutas que ya tenías
 app.use('/api/auth', authRoutes);
 app.use('/api/publication-requests', publicationRequestRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/document-verification', documentVerificationRoutes);
-
-
+app.use('/api/terrace-images', terraceImagesRoutes);
+//app.use('/api/reservation', reservationRoutes); 
+app.use('/api/dashboard', dashboardRoutes);
 
 // CORREGIDO: Manejo de rutas no encontradas
 app.use((req, res) => {
@@ -67,16 +64,5 @@ app.use((error, req, res, next) => {
     error: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
 });
-
-// En app.js, después de las otras rutas
-app.use('/api/terrace-images', require('./routes/terraceImages.routes'));
-app.use('/api/debug', require('./routes/imageDebug.routes'));
-// Servir la carpeta uploads completa
-app.use('/uploads', express.static('uploads'));
-
-// ... después de otras rutas
-app.use('/api/terrace-images', terraceImagesRoutes);
-
-
 
 module.exports = app;

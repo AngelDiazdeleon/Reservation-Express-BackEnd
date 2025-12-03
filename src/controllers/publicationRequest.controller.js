@@ -2,6 +2,7 @@
 const mongoose = require('mongoose');
 const PublicationRequest = require('../models/PublicationRequest');
 const localFileService = require('../services/localFile.service');
+const RealTimeService = require('../services/realTime.service');
 const fs = require('fs');
 
 class PublicationRequestController {
@@ -32,6 +33,10 @@ class PublicationRequestController {
       
       console.log('👤 Usuario:', ownerId);
       console.log('📦 Campos recibidos:', Object.keys(req.body));
+
+      // OBTENER DATOS DEL USUARIO PARA NOTIFICACIONES
+      const User = require('../models/User');
+      const user = await User.findById(ownerId);
 
       // Validar campos requeridos
       const requiredFields = ['name', 'description', 'capacity', 'location', 'price', 'contactPhone', 'contactEmail'];
@@ -143,6 +148,18 @@ class PublicationRequestController {
       console.log('💾 Guardando publicación en MongoDB...');
       const savedRequest = await publicationRequest.save();
       
+      // 1️⃣ NOTIFICACIÓN A ADMINS - Nueva solicitud de terraza
+      await RealTimeService.notifyAdminsNewTerraceRequest(
+        {
+          id: savedRequest._id,
+          name: terraceData.name,
+          location: terraceData.location,
+          price: terraceData.price,
+          capacity: terraceData.capacity
+        },
+        user
+      );
+      
       // Popular datos para la respuesta
       await savedRequest.populate('owner', 'name email phone');
 
@@ -151,6 +168,10 @@ class PublicationRequestController {
       res.status(201).json({ 
         success: true, 
         message: 'Terraza publicada exitosamente y enviada para revisión',
+        notification: {
+          type: 'pending_review',
+          message: 'Tu terraza ha sido enviada para revisión por los administradores'
+        },
         data: {
           id: savedRequest._id,
           terraceData: savedRequest.terraceData,
@@ -262,7 +283,8 @@ class PublicationRequestController {
       const { id } = req.params;
       const { adminNotes } = req.body;
       
-      const request = await PublicationRequest.findById(id);
+      // Obtener solicitud con datos del dueño
+      const request = await PublicationRequest.findById(id).populate('owner');
       if (!request) {
         return res.status(404).json({ 
           success: false, 
@@ -277,6 +299,7 @@ class PublicationRequestController {
         });
       }
 
+      const oldStatus = request.status;
       request.status = 'approved';
       request.adminNotes = adminNotes || '';
       request.reviewedBy = req.user.id;
@@ -285,9 +308,36 @@ class PublicationRequestController {
       await request.save();
       await request.populate('reviewedBy', 'name email');
 
+      // 2️⃣ NOTIFICACIÓN AL HOST - Terraza aprobada
+      await RealTimeService.notifyHostTerraceStatus(
+        request.owner._id,
+        {
+          id: request._id,
+          name: request.terraceData.name
+        },
+        'approved',
+        req.user.name || 'Administrador',
+        adminNotes
+      );
+
+      // 3️⃣ NOTIFICACIÓN A CLIENTES - Nueva terraza publicada
+      await RealTimeService.notifyClientsNewTerracePublished({
+        id: request._id,
+        name: request.terraceData.name,
+        location: request.terraceData.location,
+        price: request.terraceData.price,
+        capacity: request.terraceData.capacity,
+        amenities: request.terraceData.amenities || [],
+        hostName: request.owner.name
+      });
+
       res.json({ 
         success: true, 
         message: 'Solicitud aprobada',
+        notification: {
+          type: 'approved',
+          message: `La terraza ha sido aprobada y notificada a los clientes`
+        },
         data: request 
       });
     } catch (err) {
@@ -304,7 +354,8 @@ class PublicationRequestController {
       const { id } = req.params;
       const { adminNotes } = req.body;
       
-      const request = await PublicationRequest.findById(id);
+      // Obtener solicitud con datos del dueño
+      const request = await PublicationRequest.findById(id).populate('owner');
       if (!request) {
         return res.status(404).json({ 
           success: false, 
@@ -319,6 +370,7 @@ class PublicationRequestController {
         });
       }
 
+      const oldStatus = request.status;
       request.status = 'rejected';
       request.adminNotes = adminNotes || '';
       request.reviewedBy = req.user.id;
@@ -327,9 +379,25 @@ class PublicationRequestController {
       
       await request.populate('reviewedBy', 'name email');
 
+      // 2️⃣ NOTIFICACIÓN AL HOST - Terraza rechazada
+      await RealTimeService.notifyHostTerraceStatus(
+        request.owner._id,
+        {
+          id: request._id,
+          name: request.terraceData.name
+        },
+        'rejected',
+        req.user.name || 'Administrador',
+        adminNotes
+      );
+
       res.json({ 
         success: true, 
         message: 'Solicitud rechazada',
+        notification: {
+          type: 'rejected',
+          message: 'El host ha sido notificado del rechazo'
+        },
         data: request 
       });
     } catch (err) {
@@ -491,5 +559,4 @@ class PublicationRequestController {
   }
 }
 
-// ✅ EXPORTACIÓN CORRECTA - Esto es lo que estaba causando el error
 module.exports = PublicationRequestController;
