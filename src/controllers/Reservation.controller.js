@@ -306,3 +306,183 @@ exports.diagnostic = async (req, res) => {
     });
   }
 };
+
+//----------------------------------------------------------------
+
+// ✅ MÉTODO: Obtener reservas para host (sus terrazas)
+exports.getHostReservations = async (req, res) => {
+  try {
+    console.log('🏨 OBTENIENDO RESERVAS PARA HOST...');
+    console.log('👤 Host ID:', req.user.id);
+
+    if (!req.user || req.user.role !== 'host') {
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso solo para hosts'
+      });
+    }
+
+    // Obtener todas las reservas (en producción filtrarías por terrazas del host)
+    const reservations = await Reservation.find({})
+      .sort({ createdAt: -1 });
+
+    console.log(`✅ Encontradas ${reservations.length} reservas para el host`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Reservas obtenidas exitosamente',
+      data: reservations
+    });
+
+  } catch (error) {
+    console.error('🔴 ERROR:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al obtener reservas: ' + error.message
+    });
+  }
+};
+
+// ✅ MÉTODO: Aprobar reserva (host)
+exports.approveReservation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('✅ APROBANDO RESERVA...');
+    console.log('📋 ID de reserva:', id);
+    console.log('👤 Host que aprueba:', req.user.id);
+
+    if (!req.user || req.user.role !== 'host') {
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso solo para hosts'
+      });
+    }
+
+    const reservation = await Reservation.findById(id);
+    
+    if (!reservation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Reserva no encontrada'
+      });
+    }
+
+    // En producción, aquí verificarías que el host es dueño de la terraza
+    // if (reservation.propietarioNombre !== req.user.name) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'No eres el propietario de esta terraza'
+    //   });
+    // }
+
+    if (reservation.estado === 'confirmada') {
+      return res.status(400).json({
+        success: false,
+        message: 'La reserva ya está aprobada'
+      });
+    }
+
+    if (reservation.estado === 'cancelada') {
+      return res.status(400).json({
+        success: false,
+        message: 'No puedes aprobar una reserva cancelada'
+      });
+    }
+
+    reservation.estado = 'confirmada';
+    reservation.updatedAt = new Date();
+    await reservation.save();
+
+    console.log('✅ Reserva aprobada exitosamente');
+
+    return res.status(200).json({
+      success: true,
+      message: '✅ Reserva aprobada exitosamente',
+      data: {
+        id: reservation._id,
+        estado: reservation.estado,
+        terrazaNombre: reservation.terrazaNombre,
+        fecha: reservation.fechaReserva
+      }
+    });
+
+  } catch (error) {
+    console.error('🔴 ERROR:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al aprobar reserva: ' + error.message
+    });
+  }
+};
+
+// ✅ MÉTODO: Rechazar reserva (host)
+exports.rejectReservation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('❌ RECHAZANDO RESERVA...');
+    console.log('📋 ID de reserva:', id);
+    console.log('👤 Host que rechaza:', req.user.id);
+
+    if (!req.user || req.user.role !== 'host') {
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso solo para hosts'
+      });
+    }
+
+    const reservation = await Reservation.findById(id);
+    
+    if (!reservation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Reserva no encontrada'
+      });
+    }
+
+    // En producción, aquí verificarías que el host es dueño de la terraza
+    // if (reservation.propietarioNombre !== req.user.name) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'No eres el propietario de esta terraza'
+    //   });
+    // }
+
+    if (reservation.estado === 'cancelada') {
+      return res.status(400).json({
+        success: false,
+        message: 'La reserva ya está rechazada/cancelada'
+      });
+    }
+
+    if (reservation.estado === 'completada') {
+      return res.status(400).json({
+        success: false,
+        message: 'No puedes rechazar una reserva completada'
+      });
+    }
+
+    reservation.estado = 'cancelada';
+    reservation.updatedAt = new Date();
+    await reservation.save();
+
+    console.log('✅ Reserva rechazada exitosamente');
+
+    return res.status(200).json({
+      success: true,
+      message: '✅ Reserva rechazada exitosamente',
+      data: {
+        id: reservation._id,
+        estado: reservation.estado,
+        terrazaNombre: reservation.terrazaNombre,
+        fecha: reservation.fechaReserva
+      }
+    });
+
+  } catch (error) {
+    console.error('🔴 ERROR:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al rechazar reserva: ' + error.message
+    });
+  }
+};
