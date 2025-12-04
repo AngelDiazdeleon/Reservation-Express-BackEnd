@@ -21,100 +21,251 @@ class PublicationRequestController {
   }
 
   // ✅ MÉTODO NUEVO: Obtener terrazas pendientes para administrador
-  async getPendingForAdmin(req, res) {
-    try {
-      console.log('📋 [ADMIN] Obteniendo terrazas pendientes...');
+  // En tu PublicationRequestController.js
+async getPendingForAdmin(req, res) {
+  try {
+    console.log('📋 [ADMIN BACKEND] ===== INICIANDO getPendingForAdmin =====');
+    console.log('👤 Usuario solicitante:', {
+      id: req.user.id,
+      role: req.user.role,
+      email: req.user.email
+    });
 
-      // Verificar que sea admin
-      if (req.user.role !== 'admin') {
-        console.log('❌ Acceso denegado: Usuario no es admin');
-        return res.status(403).json({
-          success: false,
-          message: 'Acceso denegado. Se requieren permisos de administrador.'
-        });
-      }
+    // Verificar que sea admin
+    if (req.user.role !== 'admin') {
+      console.log('❌ [ADMIN BACKEND] Acceso denegado: Usuario no es admin');
+      return res.status(403).json({
+        success: false,
+        message: 'Acceso denegado. Se requieren permisos de administrador.'
+      });
+    }
 
-      // Obtener todas las solicitudes pendientes o rechazadas
-      const pendingRequests = await PublicationRequest.find({
-        status: { $in: ['pending', 'rejected'] }
-      })
+    // Obtener TODAS las solicitudes primero, sin filtro
+    console.log('🔍 [ADMIN BACKEND] Buscando TODAS las solicitudes...');
+    const allRequests = await PublicationRequest.find({})
       .populate('owner', 'name email phone')
       .populate('reviewedBy', 'name email')
       .sort({ createdAt: -1 });
 
-      console.log(`✅ [ADMIN] Encontradas ${pendingRequests.length} solicitudes`);
+    console.log(`📊 [ADMIN BACKEND] Total de solicitudes en DB: ${allRequests.length}`);
+    
+    // Log todas las solicitudes encontradas
+    allRequests.forEach((req, index) => {
+      console.log(`   ${index + 1}. ID: ${req._id}, Nombre: ${req.terraceData?.name || 'Sin nombre'}, Estado: ${req.status}, Owner: ${req.owner?.name || 'Sin owner'}`);
+    });
 
-      // Para cada solicitud, obtener los documentos del propietario
-      const requestsWithDocuments = await Promise.all(
-        pendingRequests.map(async (request) => {
-          // Obtener documentos del propietario desde DocumentVerification
-          const documents = await DocumentVerification.find({
-            userId: request.owner._id.toString()
-          }).sort({ uploadDate: -1 });
+    // Filtrar solo pendientes o rechazadas
+    const pendingRequests = allRequests.filter(request => 
+      request.status === 'pending' || request.status === 'rejected'
+    );
 
-          return {
-            _id: request._id,
+    console.log(`✅ [ADMIN BACKEND] Solicitudes pendientes/rechazadas: ${pendingRequests.length}`);
+    
+    // Para cada solicitud, obtener los documentos del propietario
+    console.log('📄 [ADMIN BACKEND] Obteniendo documentos de propietarios...');
+    const requestsWithDocuments = await Promise.all(
+      pendingRequests.map(async (request) => {
+        const documents = await DocumentVerification.find({
+          userId: request.owner._id.toString()
+        }).sort({ uploadDate: -1 });
+
+        console.log(`   📄 Para ${request.owner.name}: ${documents.length} documentos`);
+
+        return {
+          _id: request._id,
+          terraceData: {
             name: request.terraceData?.name || 'Sin nombre',
             description: request.terraceData?.description || 'Sin descripción',
-            owner: {
-              _id: request.owner._id,
-              name: request.owner.name,
-              email: request.owner.email,
-              phone: request.owner.phone
-            },
             location: request.terraceData?.location || 'Sin ubicación',
             capacity: request.terraceData?.capacity || 0,
             price: request.terraceData?.price || 0,
-            status: request.status,
-            adminNotes: request.adminNotes,
-            reviewedBy: request.reviewedBy,
-            reviewedAt: request.reviewedAt,
-            createdAt: request.createdAt,
-            updatedAt: request.updatedAt,
-            documents: documents.map(doc => ({
-              _id: doc._id,
-              fileName: doc.fileName,
-              category: doc.category,
-              status: doc.status,
-              uploadDate: doc.uploadDate,
-              adminNotes: doc.adminNotes,
-              reviewDate: doc.reviewDate,
-              mimeType: doc.mimeType,
-              fileSize: doc.fileSize,
-              // URL para descargar el documento
-              downloadUrl: `/api/document-verification/download/${doc._id}`
-            })),
-            // Información adicional
-            contactPhone: request.terraceData?.contactPhone,
-            contactEmail: request.terraceData?.contactEmail,
+            contactPhone: request.terraceData?.contactPhone || '',
+            contactEmail: request.terraceData?.contactEmail || '',
             amenities: request.terraceData?.amenities || [],
-            photos: request.photos || [],
             rules: request.terraceData?.rules || ''
-          };
-        })
-      );
+          },
+          owner: {
+            _id: request.owner._id,
+            name: request.owner.name,
+            email: request.owner.email,
+            phone: request.owner.phone
+          },
+          photos: request.photos || [],
+          status: request.status,
+          adminNotes: request.adminNotes,
+          reviewedBy: request.reviewedBy,
+          reviewedAt: request.reviewedAt,
+          createdAt: request.createdAt,
+          updatedAt: request.updatedAt,
+          documents: documents.map(doc => ({
+            _id: doc._id,
+            fileName: doc.fileName,
+            category: doc.category,
+            status: doc.status,
+            uploadDate: doc.uploadDate,
+            adminNotes: doc.adminNotes,
+            reviewDate: doc.reviewDate,
+            mimeType: doc.mimeType,
+            fileSize: doc.fileSize,
+            filePath: doc.filePath || '',
+            downloadUrl: `/api/document-verification/download/${doc._id}`
+          }))
+        };
+      })
+    );
 
-      res.json({
-        success: true,
-        terraces: requestsWithDocuments,
-        count: requestsWithDocuments.length,
-        stats: {
-          pending: pendingRequests.filter(r => r.status === 'pending').length,
-          rejected: pendingRequests.filter(r => r.status === 'rejected').length,
-          total: pendingRequests.length
-        }
-      });
+    const responseData = {
+      success: true,
+      terraces: requestsWithDocuments,
+      count: requestsWithDocuments.length,
+      stats: {
+        pending: pendingRequests.filter(r => r.status === 'pending').length,
+        rejected: pendingRequests.filter(r => r.status === 'rejected').length,
+        total: pendingRequests.length,
+        allTotal: allRequests.length
+      },
+      debug: {
+        timestamp: new Date().toISOString(),
+        userId: req.user.id,
+        allRequestsCount: allRequests.length,
+        filteredCount: pendingRequests.length
+      }
+    };
 
-    } catch (error) {
-      console.error('❌ [ADMIN] Error obteniendo terrazas pendientes:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error interno al obtener terrazas pendientes',
-        error: error.message
+    console.log('📨 [ADMIN BACKEND] Enviando respuesta:', {
+      success: responseData.success,
+      terracesCount: responseData.count,
+      stats: responseData.stats
+    });
+
+    res.json(responseData);
+
+  } catch (error) {
+    console.error('❌ [ADMIN BACKEND] Error obteniendo terrazas pendientes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno al obtener terrazas pendientes',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+}
+  // Eliminaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaar
+  // ✅ MÉTODO PARA ELIMINAR PUBLICACIÓN (HOST)
+async delete(req, res) {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    
+    console.log(`🗑️ [HOST] Eliminando publicación ${id} por usuario ${userId}`);
+    
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'ID inválido' 
       });
     }
+    
+    // Buscar la publicación
+    const publication = await PublicationRequest.findById(id);
+    
+    if (!publication) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Publicación no encontrada' 
+      });
+    }
+    
+    // Verificar que el usuario sea el dueño
+    if (publication.owner.toString() !== userId && req.user.role !== 'admin') {
+      console.log('❌ Usuario no autorizado para eliminar esta publicación');
+      return res.status(403).json({ 
+        success: false, 
+        message: 'No tienes permisos para eliminar esta publicación' 
+      });
+    }
+    
+    // Verificar si hay reservas activas (si aplica)
+    // Puedes agregar esta lógica si tienes un modelo de reservas
+    // const Reservation = require('../models/Reservation');
+    // const activeReservations = await Reservation.countDocuments({
+    //   terraceId: id,
+    //   status: { $in: ['pending', 'confirmed', 'active'] }
+    // });
+    
+    // if (activeReservations > 0 && publication.status === 'approved') {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: 'No puedes eliminar una terraza con reservas activas'
+    //   });
+    // }
+    
+    // Eliminar las fotos asociadas si existen
+    if (publication.photos && publication.photos.length > 0) {
+      console.log(`🗑️ Eliminando ${publication.photos.length} fotos...`);
+      
+      for (const photo of publication.photos) {
+        try {
+          // Eliminar archivo físico si existe
+          if (photo.filename) {
+            await localFileService.deleteFile(photo.filename);
+            console.log(`✅ Foto eliminada: ${photo.filename}`);
+          }
+        } catch (fileError) {
+          console.warn(`⚠️ Error eliminando foto: ${fileError.message}`);
+          // Continuar aunque falle la eliminación del archivo
+        }
+      }
+    }
+    
+    // Eliminar el documento de la base de datos
+    await PublicationRequest.findByIdAndDelete(id);
+    
+    console.log(`✅ Publicación ${id} eliminada exitosamente`);
+    
+    // Notificar al host sobre la eliminación
+    await RealTimeService.notifyHostTerraceDeleted(
+      userId,
+      {
+        id: publication._id,
+        name: publication.terraceData?.name || 'Terraza'
+      }
+    );
+    
+    // Si era una terraza aprobada, notificar a administradores
+    if (publication.status === 'approved') {
+      const User = require('../models/User');
+      const user = await User.findById(userId);
+      
+      await RealTimeService.notifyAdminsTerraceDeleted(
+        {
+          id: publication._id,
+          name: publication.terraceData?.name || 'Terraza',
+          hostName: user?.name || 'Anfitrión',
+          deletedAt: new Date()
+        }
+      );
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Terraza eliminada exitosamente',
+      data: {
+        id: publication._id,
+        name: publication.terraceData?.name
+      }
+    });
+    
+  } catch (err) {
+    console.error('💥 Error eliminando publicación:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error eliminando la terraza', 
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
   }
-
+}
+  // --------------------------------------------------
   // ✅ MÉTODO NUEVO: Obtener documentos de un usuario específico
   async getUserDocuments(req, res) {
     try {

@@ -70,4 +70,13 @@ router.get('/admin/user-documents/:userId',
   controller.getUserDocuments
 );
 
+
+
+// Eliminar publicación (solo host dueño)
+router.delete('/:id', 
+  requireAuth, 
+  requireRole('host'), 
+  controller.delete
+);
+
 module.exports = router;
